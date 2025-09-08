@@ -1,0 +1,4 @@
+1. Get the LoadBalancer EXTERNAL-IP:
+   kubectl get svc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+2. Open http://<EXTERNAL-IP> in your browser.
