@@ -1,0 +1,56 @@
+name: Deploy Hello World (Helm)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1            # <-- change if needed
+  EKS_CLUSTER_NAME: your-eks-name  # <-- set your cluster name
+  K8S_NAMESPACE: hello             # namespace to deploy into
+  RELEASE_NAME: hello
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}          # or use OIDC role if you’ve set one up
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Authenticate to EKS
+        run: |
+          aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
+          kubectl version --client
+          kubectl get nodes
+
+      - name: Create namespace if not exists
+        run: |
+          kubectl get ns "${K8S_NAMESPACE}" || kubectl create ns "${K8S_NAMESPACE}"
+
+      - name: Helm upgrade/install
+        run: |
+          helm upgrade --install "${RELEASE_NAME}" ./helm/hello-world \
+            --namespace "${K8S_NAMESPACE}" \
+            --values ./helm/hello-world/values.yaml
+
+      - name: Show service
+        run: kubectl get svc -n "${K8S_NAMESPACE}" -l app.kubernetes.io/instance="${RELEASE_NAME}"
