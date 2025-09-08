@@ -7,7 +7,7 @@ on:
 
 env:
   AWS_REGION: us-east-1            # <-- change if needed
-  EKS_CLUSTER_NAME: your-eks-name  # <-- set your cluster name
+  EKS_CLUSTER_NAME: demo-hello-eks  # <-- set your cluster name
   K8S_NAMESPACE: hello             # namespace to deploy into
   RELEASE_NAME: hello
 
