@@ -3,14 +3,13 @@ kind: Service
 metadata:
   name: {{ include "hello-world.fullname" . }}
   labels:
-    app.kubernetes.io/name: {{ include "hello-world.name" . }}
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "hello-world.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.service.type }}
+  type: {{ .Values.service.type | default "LoadBalancer" }}
   selector:
     app.kubernetes.io/name: {{ include "hello-world.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
   ports:
     - name: http
-      port: {{ .Values.service.port }}
-      targetPort: {{ .Values.service.targetPort }}
+      port: {{ .Values.service.port | default 80 }}
+      targetPort: {{ .Values.service.targetPort | default 80 }}
