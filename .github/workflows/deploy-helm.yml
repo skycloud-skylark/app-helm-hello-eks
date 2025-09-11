@@ -10,11 +10,11 @@ env:
   EKS_CLUSTER_NAME: demo-hello-eks
   K8S_NAMESPACE: hello
   RELEASE_NAME: hello
-  CHART_DIR: ./hello-world   # <<-- your chart folder
+  CHART_DIR: ./hello-world
 
 permissions:
   contents: read
-  id-token: write
+  id-token: write   # <-- required for OIDC
 
 jobs:
   deploy:
@@ -23,17 +23,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # quick sanity check so we fail early if path is wrong
       - name: Verify chart path
         run: |
           ls -la "${CHART_DIR}" || true
           test -f "${CHART_DIR}/Chart.yaml" || { echo "Chart.yaml not found at ${CHART_DIR}"; exit 1; }
 
-      - name: Set up AWS credentials
+      # OIDC: assume IAM role (no long-lived secrets)
+      - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}          # (or switch to OIDC later)
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::109736156037:role/gh-oidc-app-helm-hello-eks-deployer
+          role-session-name: gha-helm-deploy
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Install kubectl
@@ -61,7 +61,6 @@ jobs:
             --values "${CHART_DIR}/values.yaml" \
             --wait --atomic --timeout 5m
 
-      # don't hardcode the deployment name; wait by label
       - name: Wait for rollout
         run: |
           kubectl rollout status deployment -n "${K8S_NAMESPACE}" \
