@@ -5,22 +5,31 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+# ----- Change these if needed -----
 env:
   AWS_REGION: us-east-1
   EKS_CLUSTER_NAME: demo-hello-eks
   K8S_NAMESPACE: hello
   RELEASE_NAME: hello
   CHART_DIR: ./hello-world
+# ----------------------------------
 
+# Required for OIDC role assumption; no long-lived AWS keys
 permissions:
   contents: read
-  id-token: write   # <-- required for OIDC
+  id-token: write
+
+# Prevent overlapping deploys to the same env
+concurrency:
+  group: deploy-hello-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Verify chart path
@@ -28,7 +37,7 @@ jobs:
           ls -la "${CHART_DIR}" || true
           test -f "${CHART_DIR}/Chart.yaml" || { echo "Chart.yaml not found at ${CHART_DIR}"; exit 1; }
 
-      # OIDC: assume IAM role (no long-lived secrets)
+      # Assume your IAM role via OIDC (no access keys)
       - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -36,20 +45,29 @@ jobs:
           role-session-name: gha-helm-deploy
           aws-region: ${{ env.AWS_REGION }}
 
+      # (Optional) Quick identity + EKS API check
+      - name: Debug STS/EKS
+        run: |
+          aws sts get-caller-identity
+          aws eks describe-cluster --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}" --query 'cluster.arn'
+
+      # Build kubeconfig for this runner (no cluster-scoped kubectl calls)
+      - name: Authenticate to EKS
+        run: |
+          aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
+          kubectl config current-context
+
+      # Namespaced-only sanity checks (kept read-only)
+      - name: Sanity check in namespace
+        run: |
+          kubectl auth can-i get pods -n "${K8S_NAMESPACE}" || true
+          kubectl get deploy -n "${K8S_NAMESPACE}" --ignore-not-found
+
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
 
       - name: Install Helm
         uses: azure/setup-helm@v4
-
-      - name: Authenticate to EKS
-        run: |
-          aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
-          kubectl get nodes
-
-      - name: Create namespace if not exists
-        run: |
-          kubectl get ns "${K8S_NAMESPACE}" || kubectl create ns "${K8S_NAMESPACE}"
 
       - name: Helm lint
         run: helm lint "${CHART_DIR}"
@@ -58,6 +76,7 @@ jobs:
         run: |
           helm upgrade --install "${RELEASE_NAME}" "${CHART_DIR}" \
             --namespace "${K8S_NAMESPACE}" \
+            --create-namespace=false \
             --values "${CHART_DIR}/values.yaml" \
             --wait --atomic --timeout 5m
 
@@ -68,5 +87,24 @@ jobs:
 
       - name: Show service
         run: |
+          echo "Services in namespace:"
           kubectl get svc -n "${K8S_NAMESPACE}"
-          kubectl get svc -n "${K8S_NAMESPACE}" -l app.kubernetes.io/instance="${RELEASE_NAME}"
+          echo "Service(s) for this release:"
+          kubectl get svc -n "${K8S_NAMESPACE}" -l app.kubernetes.io/instance="${RELEASE_NAME}" -o wide
+
+      # Optional: print a handy endpoint if it's a LoadBalancer or NodePort
+      - name: Print service endpoint (best-effort)
+        run: |
+          # LB hostname/IP (if available)
+          kubectl get svc -n "${K8S_NAMESPACE}" -l app.kubernetes.io/instance="${RELEASE_NAME}" \
+            -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}{.items[0].status.loadBalancer.ingress[0].ip}{"\n"}' || true
+          # NodePort (fallback info)
+          kubectl get svc -n "${K8S_NAMESPACE}" -l app.kubernetes.io/instance="${RELEASE_NAME}" \
+            -o jsonpath='{.items[0].spec.ports[0].nodePort}{"\n"}' || true
+
+      # If anything fails above, dump helpful diagnostics (namespaced only)
+      - name: On failure, dump namespaced diagnostics
+        if: failure()
+        run: |
+          kubectl -n "${K8S_NAMESPACE}" get all
+          kubectl -n "${K8S_NAMESPACE}" get events --sort-by=.lastTimestamp | tail -n 50
